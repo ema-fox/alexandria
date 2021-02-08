@@ -305,6 +305,9 @@
       (submit-button "send it"))))
 
 (defroutes writer-routes
+  (GET "/" [] index)
+  (GET "/a/:title" [title :as req] (article-page req (url-decode title)))
+  (GET "/a/:title/:id" [title id :as req] (text-page req (url-decode title) (Long. id)))
   (POST "/add-text" [] add-text-post)
   (POST "/sell" [] sell)
   (POST "/buy" [] buy))
@@ -325,9 +328,6 @@
   (GET "/login" [] login-form)
   (friend/wrap-authorize writer-routes #{:writer})
   (friend/wrap-authorize admin-routes #{:admin})
-  (GET "/" [] index)
-  (GET "/a/:title" [title :as req] (article-page req (url-decode title)))
-  (GET "/a/:title/:id" [title id :as req] (text-page req (url-decode title) (Long. id)))
   (route/resources "/")
   (route/not-found "not found"))
 
