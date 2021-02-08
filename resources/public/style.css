@@ -1,0 +1,25 @@
+.header {
+    display: flex;
+    justify-content: space-between;
+}
+
+.petal {
+    border-radius: 1ch;
+    margin: 0.1ch;
+}
+
+.red {
+    background-color: rgba(240, 20, 30, 0.3);
+}
+
+.blue {
+    background-color: rgba(20, 30, 240, 0.3);
+}
+
+.green {
+    background-color: rgba(30, 240, 20, 0.3);
+}
+
+.yellow{
+    background-color: rgba(240, 200, 20, 0.3);
+}
