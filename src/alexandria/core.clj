@@ -127,11 +127,12 @@
                 (str id)
                 (link-to (str (article-url title) "/" oid) (str oid)))))
       [:div text]
-      (form-to [:post "/add-text"]
-        (anti-forgery-field)
-        (hidden-field :title title)
-        [:div "article" (text-area :text text)]
-        (submit-button "send it")))))
+      (if (friend/authorized? #{:writer} user)
+        (form-to [:post "/add-text"]
+          (anti-forgery-field)
+          (hidden-field :title title)
+          [:div "article" (text-area :text text)]
+          (submit-button "send it"))))))
 
 (defn petal-class [cc]
   (str "petal " (name cc)))
@@ -200,7 +201,7 @@
              (anti-forgery-field)
              (hidden-field :text-id id)
              (submit-button "buy")))
-         (if (friend/authorized? #{:admin} (friend/identity req))
+         (if (friend/authorized? #{:admin} user)
            (form-to [:post "/settle"]
              (anti-forgery-field)
              (hidden-field :text-id id)
@@ -298,16 +299,14 @@
                        [_ :title ?title]]
                      @conn)]
       (list " " (link-to (article-url title) title)))
-    (form-to [:post "/add-text"]
-      (anti-forgery-field)
-      [:div "Title" (text-field :title)]
-      [:div "article" (text-area  :text)]
-      (submit-button "send it"))))
+    (if (friend/authorized? #{:writer} (friend/identity req))
+      (form-to [:post "/add-text"]
+        (anti-forgery-field)
+        [:div "Title" (text-field :title)]
+        [:div "article" (text-area  :text)]
+        (submit-button "send it")))))
 
 (defroutes writer-routes
-  (GET "/" [] index)
-  (GET "/a/:title" [title :as req] (article-page req (url-decode title)))
-  (GET "/a/:title/:id" [title id :as req] (text-page req (url-decode title) (Long. id)))
   (POST "/add-text" [] add-text-post)
   (POST "/sell" [] sell)
   (POST "/buy" [] buy))
@@ -317,6 +316,7 @@
 
 (defn login-form [req]
   (html5
+    [:title "Login - Alexandria"]
     [:h3 "Login"]
     (form-to [:post "/login"]
       (anti-forgery-field)
@@ -324,10 +324,19 @@
       [:div "Password" [:input {:type "password" :name "password"}]]
       [:div (submit-button "login")])))
 
-(defroutes app
-  (GET "/login" [] login-form)
+(defroutes user-routes
   (friend/wrap-authorize writer-routes #{:writer})
-  (friend/wrap-authorize admin-routes #{:admin})
+  (friend/wrap-authorize admin-routes #{:admin}))
+
+(defroutes app
+  (GET "/a/:title" [title :as req] (article-page req (url-decode title)))
+  (GET "/a/:title/:id" [title id :as req] (text-page req (url-decode title) (Long. id)))
+  (GET "/login" [] login-form)
+  (GET "/" [] index)
+  (friend/authenticate user-routes
+                      {:default-landing-uri "/"
+                       :credential-fn (partial creds/bcrypt-credential-fn users)
+                       :workflows [(workflows/interactive-form)]})
   (route/resources "/")
   (route/not-found "not found"))
 
@@ -337,10 +346,6 @@
   (prn args))
 
 (def wrapped-app (-> app
-                     (friend/authenticate
-                      {:default-landing-uri "/"
-                       :credential-fn (partial creds/bcrypt-credential-fn users)
-                       :workflows [(workflows/interactive-form)]})
                      (wrap-defaults site-defaults)))
 
 (def reloadable-app
