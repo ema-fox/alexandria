@@ -105,14 +105,14 @@
           [:div.header
            (link-to "/" [:h3 "Alexandria"])
            (if-let [user# (friend/identity req#)]
-              [:div
-               (user-info user#)
-               " "
-               (link-to "/logout" "logout")]
-              (list
-               (link-to "/login" "login")
-               " "
-               (link-to "/register" "register")))]
+             [:div
+              (user-info user#)
+              " "
+              (link-to "/logout" "logout")]
+             [:div
+              (link-to "/login" "login")
+              " "
+              (link-to "/register" "register")])]
           ~@contents]))))
 
 (defn text-page [req title id]
