@@ -44,7 +44,8 @@
              (one :text :db.type/string)
              (one :title :db.type/string)
 
-             (one :is-admin :db.type/boolean)
+             (one :password :db.type/string)
+             (many :role :db.type/keyword)
              ])
 
 (def cfg {:store {:backend :file :path "data"}})
@@ -87,24 +88,32 @@
 (defn user-info [user]
   (let [name (:current user)
         name-lr [:name name]]
-    [:div.user-info
+    [:span.user-info
      (str name " " (:money (entity @conn name-lr)))]))
 
-(defmacro apage [options & contents]
+(defmacro apage [req options & contents]
   (if-not (map? options)
-    `(apage {} ~options ~@contents)
-    `(html5
-       [:head
-        [:title ~(if-let [title (:title options)]
-                   `(str ~title " - Alexandria")
-                   "Alexandria")]
-        (include-css "/style.css")]
-       [:body
-        [:div.header
-         (link-to "/" [:h3 "Alexandria"])
-         ~(if-let [user (:user options)]
-            `(user-info ~user))]
-        ~@contents])))
+    `(apage ~req {} ~options ~@contents)
+    `(let [req# ~req]
+       (html5
+         [:head
+          [:title ~(if-let [title (:title options)]
+                     `(str ~title " - Alexandria")
+                     "Alexandria")]
+          (include-css "/style.css")]
+         [:body
+          [:div.header
+           (link-to "/" [:h3 "Alexandria"])
+           (if-let [user# (friend/identity req#)]
+              [:div
+               (user-info user#)
+               " "
+               (link-to "/logout" "logout")]
+              (list
+               (link-to "/login" "login")
+               " "
+               (link-to "/register" "register")))]
+          ~@contents]))))
 
 (defn text-page [req title id]
   (let [user (friend/identity req)
@@ -119,7 +128,7 @@
                  :where
                  [?id :title ?title]]
                @conn title))]
-    (apage {:title title :user user}
+    (apage req {:title title}
       (link-to (article-url title) [:h1 title])
       (for [oid (sort ids)]
         (list " "
@@ -176,7 +185,7 @@
                               [?pos :owner ?owner]]
                             @conn title name-lr))
         prcs (prices amounts)]
-    (apage {:title title :user user}
+    (apage req {:title title}
       [:h1 title]
       (for [[id cc] ids]
         (list " " (link-to {:class (petal-class cc)} (str  (article-url title) "/" id) (str id))))
@@ -293,7 +302,7 @@
 
 
 (defn index [req]
-  (apage {:user (friend/identity req)}
+  (apage req
     (for [[title] (q '[:find ?title
                        :where
                        [_ :title ?title]]
@@ -315,8 +324,7 @@
   (POST "/settle" [] settle))
 
 (defn login-form [req]
-  (html5
-    [:title "Login - Alexandria"]
+  (apage req {:title "Login"}
     [:h3 "Login"]
     (form-to [:post "/login"]
       (anti-forgery-field)
@@ -324,18 +332,49 @@
       [:div "Password" [:input {:type "password" :name "password"}]]
       [:div (submit-button "login")])))
 
+(defn register-form [req]
+  (apage req {:title "Register"}
+    [:h3 "Register"]
+    (form-to [:post "/register"]
+      (anti-forgery-field)
+      [:div "Username" [:input {:type "text" :name "username"}]]
+      [:div "Password" [:input {:type "password" :name "password"}]]
+      [:div (submit-button "register")])))
+
+(defn add-user [name password]
+  (transact conn [{:name name
+                   :password (creds/hash-bcrypt password)
+                   :money 500}]))
+
+(defn register-post [{{:keys [username password]} :params :as req}]
+  (if (entity @conn [:name username])
+    ; tktk show error
+    (redirect "/register")
+    (do
+      (add-user username password)
+      (redirect "/login"))))
+
 (defroutes user-routes
   (friend/wrap-authorize writer-routes #{:writer})
   (friend/wrap-authorize admin-routes #{:admin}))
+
+(defn user-creds [name]
+  (let [{:keys [name password role]} (entity @conn [:name name])]
+    {:username name
+     :password password
+     :roles role}))
 
 (defroutes app
   (GET "/a/:title" [title :as req] (article-page req (url-decode title)))
   (GET "/a/:title/:id" [title id :as req] (text-page req (url-decode title) (Long. id)))
   (GET "/login" [] login-form)
+  (GET "/register" [] register-form)
+  (POST "/register" [] register-post)
   (GET "/" [] index)
+  (friend/logout (GET "/logout" [] (redirect "/")))
   (friend/authenticate user-routes
                       {:default-landing-uri "/"
-                       :credential-fn (partial creds/bcrypt-credential-fn users)
+                       :credential-fn (partial creds/bcrypt-credential-fn user-creds)
                        :workflows [(workflows/interactive-form)]})
   (route/resources "/")
   (route/not-found "not found"))
