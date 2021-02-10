@@ -344,6 +344,7 @@
 (defn add-user [name password]
   (transact conn [{:name name
                    :password (creds/hash-bcrypt password)
+                   :role [:writer]
                    :money 500}]))
 
 (defn register-post [{{:keys [username password]} :params :as req}]
