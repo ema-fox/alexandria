@@ -91,9 +91,20 @@
 (defn article-url [title]
   (str "/a/" (url-encode title)))
 
-(defn add-text-post [{{:keys [title text]} :params}]
+(defn do-buy [name id]
+  (let [name-lr [:name name]
+        foo (get-or-create {:of id
+                            :owner name-lr}
+                           [:amount])
+        bar (+merge foo {:amount 100})
+        title (get-title id)
+        tres (transact conn [bar])]
+    (charge tres title name-lr #(Math/ceil %))))
+
+(defn add-text-post [{{:keys [title text]} :params :as req}]
   (let [id (add-text title text)]
-    (redirect (str (article-url title) "/" id))))
+    (do-buy (:current (friend/identity req)) id)
+    (redirect (article-url title))))
 
 (defn user-info [user]
   (let [name (:current user)
@@ -242,14 +253,8 @@
 
 (defn buy [{:keys [params] :as req}]
   (let [id (Long. (:text-id params))
-        name-lr [:name (:current (friend/identity req))]
-        foo (get-or-create {:of id
-                            :owner name-lr}
-                           [:amount])
-        bar (+merge foo {:amount 100})
-        title (get-title id)
-        tres (transact conn [bar])]
-    (charge tres title name-lr #(Math/ceil %))
+        title (get-title id)]
+    (do-buy (:current (friend/identity req)) id)
     (redirect (article-url title))))
 
 (defn sell [{:keys [params] :as req}]
