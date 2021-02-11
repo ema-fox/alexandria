@@ -66,9 +66,19 @@
 (defn add-person [name email]
   (transact conn [{:name name :email email}]))
 
+(defn lookup [db m]
+  (q {:find '[?id .]
+      :where (for [[k v] m]
+               ['?id k v])}
+     db))
+
+(defn ensure [db m]
+  (if-not (lookup db m) [m]))
+
 (defn add-text [title text]
-  (get-in (transact conn [{:db/id "text" :title title :text text}])
-          [:tempids "text"]))
+  (let [e {:title title :text text}]
+    (lookup (:db-after (transact conn [[:db.fn/call ensure e]]))
+            e)))
 
 (defn persons []
   (q '[:find [?name ...]
@@ -220,10 +230,7 @@
   (:title (entity @conn id)))
 
 (defn get-or-create [m p]
-  (if-let [id (q {:find '[?id .]
-                  :where (for [[k v] m]
-                           ['?id k v])}
-                 @conn)]
+  (if-let [id (lookup @conn m)]
     (pull @conn (conj p :db/id) id)
     m))
 
