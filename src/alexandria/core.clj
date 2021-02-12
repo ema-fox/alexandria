@@ -76,9 +76,28 @@
 (defn ensure [db m]
   (if-not (lookup db m) [m]))
 
+(def active-id '[[(active ?id)
+                  [?id :chosen true]]
+                 [(active ?id)
+                  [?pos :of ?id]
+                  [?pos :amount ?amount]
+                  [(> ?amount 0)]]])
+
+(defn ensure-active-text [db title]
+  (if-not (q '[:find ?id .
+               :in $ % ?title
+               :where
+               [?id :title ?title]
+               (active ?id)]
+             db
+             active-id
+             title)
+    [{:title title :text "" :chosen true}]))
+
 (defn add-text [title text]
   (let [e {:title title :text text}]
-    (lookup (:db-after (transact conn [[:db.fn/call ensure e]]))
+    (lookup (:db-after (transact conn [[:db.fn/call ensure-active-text title]
+                                       [:db.fn/call ensure e]]))
             e)))
 
 (defn persons []
@@ -103,13 +122,6 @@
                      db %)
                   0)
              ids))
-
-(def active-id '[[(active ?id)
-                  [?id :chosen true]]
-                 [(active ?id)
-                  [?pos :of ?id]
-                  [?pos :amount ?amount]
-                  [(> ?amount 0)]]])
 
 (defn active-ids [title]
   (map first (q '[:find ?id
