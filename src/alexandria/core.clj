@@ -331,7 +331,9 @@
                        :in $ %
                        :where
                        [?id :title ?title]
-                       (active ?id)]
+                       (active ?id)
+                       [?id :text ?text]
+                       [(not= ?text "")]]
                      @conn
                      active-id)]
       (list " " (link-to (article-url title) title)))
