@@ -1,6 +1,7 @@
 (ns alexandria.core
   (:refer-clojure :exclude [read-string])
-  (:require [clojure.edn :refer [read-string]]
+  (:require (clojure [edn :refer [read-string]]
+                     [string :refer [trim]])
             [datahike.api :refer [q pull db transact entity] :as d]
             (ring.middleware [defaults :refer [wrap-defaults site-defaults]]
                               [reload :refer [wrap-reload]])
@@ -158,7 +159,7 @@
     (charge tres ids name-lr #(Math/ceil %))))
 
 (defn add-text-post [{{:keys [title text]} :params :as req}]
-  (let [id (add-text title text)]
+  (let [id (add-text title (trim text))]
     (do-buy (:current (friend/identity req)) id)
     (redirect (article-url title))))
 
