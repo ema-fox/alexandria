@@ -43,6 +43,7 @@
              (one :of :db.type/ref)
              (one :text :db.type/string)
              (one :title :db.type/string)
+             (one :chosen :db.type/boolean)
 
              (one :password :db.type/string)
              (many :role :db.type/keyword)
@@ -91,15 +92,50 @@
 (defn article-url [title]
   (str "/a/" (url-encode title)))
 
+(defn shares-for-ids [db ids]
+  (from-keys #(or (q '[:find (sum ?amount) .
+                       :with ?owner
+                       :in $ ?id
+                       :where
+                       [?pos :of ?id]
+                       [?pos :amount ?amount]
+                       [?pos :owner ?owner]]
+                     db %)
+                  0)
+             ids))
+
+(def active-id '[[(active ?id)
+                  [?id :chosen true]]
+                 [(active ?id)
+                  [?pos :of ?id]
+                  [?pos :amount ?amount]
+                  [(> ?amount 0)]]])
+
+(defn active-ids [title]
+  (map first (q '[:find ?id
+                  :in $ % ?title
+                  :where
+                  [?id :title ?title]
+                  (active ?id)]
+                @conn
+                active-id
+                title)))
+
+(defn charge [tres ids name-lr roundf]
+  (let [price (int (roundf (- (cost (shares-for-ids (:db-after tres) ids))
+                              (cost (shares-for-ids (:db-before tres) ids)))))]
+    (transact conn [[:db/add name-lr :money (- (:money (entity @conn name-lr) 0)
+                                               price)]])))
+
 (defn do-buy [name id]
   (let [name-lr [:name name]
         foo (get-or-create {:of id
                             :owner name-lr}
                            [:amount])
         bar (+merge foo {:amount 100})
-        title (get-title id)
+        ids (conj (active-ids (get-title id)) id)
         tres (transact conn [bar])]
-    (charge tres title name-lr #(Math/ceil %))))
+    (charge tres ids name-lr #(Math/ceil %))))
 
 (defn add-text-post [{{:keys [title text]} :params :as req}]
   (let [id (add-text title text)]
@@ -144,11 +180,7 @@
                   [?id :title ?title]
                   [?id :text ?text]]
                 @conn title id)
-        ids (map first (q '[:find ?id
-                 :in $ ?title
-                 :where
-                 [?id :title ?title]]
-               @conn title))]
+        ids (active-ids title)]
     (apage req {:title title}
       (link-to (article-url title) [:h1 title])
       (for [oid (sort ids)]
@@ -167,59 +199,39 @@
 (defn petal-class [cc]
   (str "petal " (name cc)))
 
-(defn shares-for-page [db title]
-  (let [ids (map first (q '[:find ?id
-                           :in $ ?title
-                           :where
-                           [?id :title ?title]]
-                          db title))
-        amounts (apply +merge (map (partial apply array-map)
-                                   (q '[:find ?id ?amount
-                                        :in $ ?title
-                                        :where
-                                        [?id :title ?title]
-                                        [?pos :of ?id]
-                                        [?pos :amount ?amount]]
-                                      db title)))]
-    (into {} (for [id ids]
-               [id (get amounts id 0)]))))
-
 (defn article-page [req title]
   (let [user (friend/identity req)
         name-lr [:name (:current user)]
-        texts (into {} (q '[:find ?id ?text
-                            :in $ ?title
-                            :where
-                            [?id :title ?title]
-                            [?id :text ?text]]
-                          @conn title))
-        ids (map vector
-                 (sort (keys texts))
-                 [:red :blue :green :yellow])
-        amounts (shares-for-page @conn title)
-        own-amounts (into {} (q '[:find ?id ?amount
-                              :in $ ?title ?owner
-                              :where
-                              [?id :title ?title]
-                              [?pos :of ?id]
-                              [?pos :amount ?amount]
-                              [?pos :owner ?owner]]
-                            @conn title name-lr))
+        ids (active-ids title)
+        texts (from-keys #(:text (entity @conn %)) ids)
+        colors (into {} (map vector
+                             ids
+                             [:red :blue :green :yellow]))
+        amounts (shares-for-ids @conn ids)
+        own-amounts (from-keys #(or (q '[:find ?amount .
+                                         :in $ ?id ?owner
+                                         :where
+                                         [?pos :of ?id]
+                                         [?pos :amount ?amount]
+                                         [?pos :owner ?owner]]
+                                       @conn % name-lr)
+                                    0)
+                               ids)
         prcs (prices amounts)]
     (apage req {:title title}
       [:h1 title]
-      (for [[id cc] ids]
-        (list " " (link-to {:class (petal-class cc)} (str  (article-url title) "/" id) (str id))))
+      (for [id ids]
+        (list " " (link-to {:class (petal-class (colors id))} (str (article-url title) "/" id) (str id))))
       [:div
        (for [chunk (flower texts)]
          (if (string? chunk)
            chunk
-           (for [[id cc] ids
+           (for [id ids
                  :let [petal (chunk id)]
                  :when petal]
-             [:span {:class (petal-class cc)} petal])))]
-      (for [[id cc] ids]
-        [:div {:class cc}
+             [:span {:class (petal-class (colors id))} petal])))]
+      (for [id ids]
+        [:div {:class (colors id)}
          (str (int (* 100 (prcs id))) " " (own-amounts id))
          (if (< 0 (own-amounts id 0))
            (form-to [:post "/sell"]
@@ -245,12 +257,6 @@
     (pull @conn (conj p :db/id) id)
     m))
 
-(defn charge [tres title name-lr roundf]
-  (let [price (int (roundf (- (cost (shares-for-page (:db-after tres) title))
-                                 (cost (shares-for-page (:db-before tres) title)))))]
-    (transact conn [[:db/add name-lr :money (- (:money (entity @conn name-lr) 0)
-                                               price)]])))
-
 (defn buy [{:keys [params] :as req}]
   (let [id (Long. (:text-id params))
         title (get-title id)]
@@ -269,7 +275,7 @@
         title (get-title id)
         tres (transact conn [[:db/add (:db/id e) :amount (- (:amount e)
                                                             (min (:amount e) 100))]])]
-    (charge tres title name-lr #(Math/floor %))
+    (charge tres (active-ids title) name-lr #(Math/floor %))
     (redirect (article-url title))))
 
 (defn settle [{:keys [params] :as req}]
@@ -293,25 +299,29 @@
                                :where
                                [?id :title ?title]
                                [?oid :title ?title]
+                               [?oid :chosen]
                                [(!= ?id ?oid)]]
                              @conn id))]
     (transact conn
               (vec (concat (for [[owner amount] ws
-                            :let [e (entity @conn owner)]]
-                        [:db/add owner :money (+ amount (:money e) 0)])
-                      (for [pos all]
-                        [:db/retractEntity pos])
-                      (for [article others]
-                        [:db/retractEntity article]))))
+                                 :let [e (entity @conn owner)]]
+                             [:db/add owner :money (+ amount (:money e) 0)])
+                           (for [pos all]
+                             [:db/retractEntity pos])
+                           (for [article others]
+                             [:db/retract article :chosen])
+                           [[:db/add id :chosen true]])))
     (redirect (str "/a/" title))))
-
 
 (defn index [req]
   (apage req
     (for [[title] (q '[:find ?title
+                       :in $ %
                        :where
-                       [_ :title ?title]]
-                     @conn)]
+                       [?id :title ?title]
+                       (active ?id)]
+                     @conn
+                     active-id)]
       (list " " (link-to (article-url title) title)))
     (if (friend/authorized? #{:writer} (friend/identity req))
       (form-to [:post "/add-text"]
