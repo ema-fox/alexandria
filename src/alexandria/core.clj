@@ -295,13 +295,6 @@
                                [?oid :title ?title]
                                [(!= ?id ?oid)]]
                              @conn id))]
-    (prn (concat (for [[owner amount] ws
-                            :let [e (entity @conn owner)]]
-                        [:db/add owner :money (+ amount (:money e) 0)])
-                      (for [pos all]
-                        [:db/retractEntity pos])
-                      (for [article others]
-                        [:db/retractEntity article])))
     (transact conn
               (vec (concat (for [[owner amount] ws
                             :let [e (entity @conn owner)]]
