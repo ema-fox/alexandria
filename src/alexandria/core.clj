@@ -139,6 +139,14 @@
     (transact conn [[:db/add name-lr :money (- (:money (entity @conn name-lr) 0)
                                                price)]])))
 
+(defn get-title [id]
+  (:title (entity @conn id)))
+
+(defn get-or-create [m p]
+  (if-let [id (lookup @conn m)]
+    (pull @conn (conj p :db/id) id)
+    m))
+
 (defn do-buy [name id]
   (let [name-lr [:name name]
         foo (get-or-create {:of id
@@ -260,14 +268,6 @@
              (anti-forgery-field)
              (hidden-field :text-id id)
              (submit-button "settle")))]))))
-
-(defn get-title [id]
-  (:title (entity @conn id)))
-
-(defn get-or-create [m p]
-  (if-let [id (lookup @conn m)]
-    (pull @conn (conj p :db/id) id)
-    m))
 
 (defn buy [{:keys [params] :as req}]
   (let [id (Long. (:text-id params))
