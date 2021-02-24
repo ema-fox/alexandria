@@ -2,7 +2,7 @@
   (:refer-clojure :exclude [read-string])
   (:require (clojure [edn :refer [read-string]]
                      [string :refer [trim]])
-            [datahike.api :refer [q pull db transact entity] :as d]
+            [datahike.api :refer [q pull transact entity] :as d]
             (ring.middleware [defaults :refer [wrap-defaults site-defaults]]
                               [reload :refer [wrap-reload]])
             (ring.util [anti-forgery :refer [anti-forgery-field]]
@@ -19,8 +19,8 @@
                              [credentials :as creds])
             [java-time :refer [local-date zone-id]]
             (alexandria [util :refer :all]
-                        [market :refer [prices cost]]
-                        [diff :refer [flower]])))
+                        [market :refer [prices charge charge-collateral]]
+                        [diff :refer [diff2 to-patch combine-patch overlapping-patch apply-select patch-to-select]])))
 
 (defn schemon [ident type cardinality]
   {:db/ident ident
@@ -41,10 +41,14 @@
              (one :money :db.type/long)
              (one :owner :db.type/ref)
              (one :amount :db.type/long)
-             (one :of :db.type/ref)
+             (assoc (many :support :db.type/ref)
+               :db/isComponent true)
              (one :text :db.type/string)
-             (one :title :db.type/string)
-             (one :chosen :db.type/boolean)
+             (assoc (one :title :db.type/string)
+               :db/unique :db.unique/identity)
+             (assoc (many :proposal :db.type/ref)
+               :db/isComponent true)
+             (many :overlaps :db.type/ref)
 
              (one :password :db.type/string)
              (many :role :db.type/keyword)
@@ -71,35 +75,47 @@
 (defn lookup [db m]
   (q {:find '[?id .]
       :where (for [[k v] m]
-               ['?id k v])}
+               (if (= \_ (first (name k)))
+                 [v (keyword (subs (name k) 1)) '?id]
+                 ['?id k v]))}
      db))
 
-(defn ensure [db m]
+(defn ensure-ent [db m]
   (if-not (lookup db m) [m]))
 
-(def active-id '[[(active ?id)
-                  [?id :chosen true]]
-                 [(active ?id)
-                  [?pos :of ?id]
-                  [?pos :amount ?amount]
-                  [(> ?amount 0)]]])
+(defn get-or-create2 [m]
+  (lookup (:db-after (transact conn [[:db.fn/call ensure-ent m]]))
+          m))
 
-(defn ensure-active-text [db title]
+(def overlaps '[[(overlaps ?id ?oid)
+                 [?id :overlaps ?oid]]
+                [(overlaps ?id ?oid)
+                 [?oid :overlaps ?id]]])
+
+(defn ensure-title [db title]
   (if-not (q '[:find ?id .
-               :in $ % ?title
+               :in $ ?title
                :where
-               [?id :title ?title]
-               (active ?id)]
-             db
-             active-id
-             title)
-    [{:title title :text "" :chosen true}]))
+               [?id :title ?title]]
+             db title)
+    [{:title title :text ""}]))
 
 (defn add-text [title text]
-  (let [e {:title title :text text}]
-    (lookup (:db-after (transact conn [[:db.fn/call ensure-active-text title]
-                                       [:db.fn/call ensure e]]))
-            e)))
+  (transact conn [[:db.fn/call ensure-title title]])
+  (let [article (entity @conn [:title title])
+        chosen (:text article)
+        patch (to-patch (diff2 chosen text))
+        id (get-or-create2 {:text text :_proposal (:db/id article)})
+        oids (->> (filter #(and (not= id (:db/id %))
+                                (let [foo (combine-patch patch
+                                                         (to-patch (diff2 chosen
+                                                                          (:text %))))
+                                      bar (overlapping-patch foo)]
+                                  bar))
+                          (:proposal article))
+                  (map :db/id))]
+    (transact conn [{:db/id id :overlaps oids}])
+    id))
 
 (defn persons []
   (q '[:find [?name ...]
@@ -113,54 +129,110 @@
   (str "/a/" (url-encode title)))
 
 (defn shares-for-ids [db ids]
-  (from-keys #(or (q '[:find (sum ?amount) .
+  (assoc (from-keys #(or (q '[:find (sum ?amount) .
                        :with ?owner
                        :in $ ?id
                        :where
-                       [?pos :of ?id]
+                       [?id :support ?pos]
                        [?pos :amount ?amount]
                        [?pos :owner ?owner]]
                      db %)
                   0)
+             ids)
+    :parent 0))
+
+(defn own-shares-for-ids [db ids owner]
+  (from-keys #(or (q '[:find ?amount .
+                       :in $ ?id ?owner
+                       :where
+                       [?id :support ?pos]
+                       [?pos :owner ?owner]
+                       [?pos :amount ?amount]]
+                     db % owner)
+                  0)
              ids))
 
-(defn active-ids [title]
-  (map first (q '[:find ?id
-                  :in $ % ?title
-                  :where
-                  [?id :title ?title]
-                  (active ?id)]
-                @conn
-                active-id
-                title)))
+(defn overlapping-siblings [id]
+  (q '[:find [?oid ...]
+       :in $ % ?id
+       :where
+       (overlaps ?id ?oid)]
+     @conn overlaps id))
 
-(defn charge [tres ids name-lr roundf]
-  (let [price (int (roundf (- (cost (shares-for-ids (:db-after tres) ids))
-                              (cost (shares-for-ids (:db-before tres) ids)))))]
-    (transact conn [[:db/add name-lr :money (- (:money (entity @conn name-lr) 0)
-                                               price)]])))
+(defn overlapping-cluster [id]
+  (conj (overlapping-siblings id) id))
+
+(defn not-overlapping-siblings [id]
+  (q '[:find [?oid ...]
+       :in $ % ?id
+       :where
+       (?parent :proposal ?id)
+       (?parent :proposal ?oid)
+       [(not= ?id ?oid)]
+       (not (overlaps ?id ?oid))]
+     @conn overlaps id))
 
 (defn get-title [id]
-  (:title (entity @conn id)))
+  (:title (:_proposal (entity @conn id))))
 
 (defn get-or-create [m p]
   (if-let [id (lookup @conn m)]
     (pull @conn (conj p :db/id) id)
     m))
 
-(defn do-buy [name id]
+(defn +money [db id amount]
+  [[:db/add id :money (+ (:money (entity db id)) amount)]])
+
+(defn retract-empty [db id]
+  (let [article (entity db id)]
+    (if (and (= (:text article) "")
+             (not (seq (:proposal article))))
+      [[:db/retractEntity id]])))
+
+(defn unsettle [db id]
+  (let [shorts
+        (q '[:find ?owner ?amount
+             :in $ ?id
+             :where
+             [?id :support ?pos]
+             [?pos :owner ?owner]
+             [?pos :amount ?amount]
+             [(< ?amount 0)]]
+           db id)]
+    (vec (concat (for [[owner amount] shorts]
+                   ; give back collateral
+                   [:db.fn/call +money owner (- amount)])
+                 [[:db/retractEntity id]
+                  [:db.fn/call retract-empty (:db/id (:_proposal (entity db id)))]]))))
+
+(defn unsettle-unsupported [db id]
+  (if-not (q '[:find ?pos .
+               :in $ ?id
+               :where
+               [?id :support ?pos]
+               [?pos :amount ?amount]
+               [(< 0 ?amount)]]
+             db id)
+    (unsettle db id)))
+
+(defn do-trade [name id amount]
   (let [name-lr [:name name]
-        foo (get-or-create {:of id
+        foo (get-or-create {:_support id
                             :owner name-lr}
                            [:amount])
-        bar (+merge foo {:amount 100})
-        ids (conj (active-ids (get-title id)) id)
-        tres (transact conn [bar])]
-    (charge tres ids name-lr #(Math/ceil %))))
+        bar (+merge foo {:amount amount})
+        tres (transact conn [bar])
+        ids (overlapping-cluster id)
+        price (+ (int (Math/ceil (charge (shares-for-ids (:db-before tres) ids)
+                                         (shares-for-ids (:db-after tres) ids))))
+                 (charge-collateral (own-shares-for-ids (:db-before tres) ids name-lr)
+                                    (own-shares-for-ids (:db-after tres) ids name-lr)))]
+    (transact conn [[:db.fn/call +money name-lr (- price)]
+                    [:db.fn/call unsettle-unsupported id]])))
 
 (defn add-text-post [{{:keys [title text]} :params :as req}]
   (let [id (add-text title (trim text))]
-    (do-buy (:current (friend/identity req)) id)
+    (do-trade (:current (friend/identity req)) id 100)
     (redirect (article-url title))))
 
 (defn user-info [user]
@@ -193,29 +265,6 @@
               (link-to "/register" "register")])]
           ~@contents]))))
 
-(defn text-page [req title id]
-  (let [user (friend/identity req)
-        text (q '[:find ?text .
-                  :in $ ?title ?id
-                  :where
-                  [?id :title ?title]
-                  [?id :text ?text]]
-                @conn title id)
-        ids (active-ids title)]
-    (apage req {:title title}
-      (link-to (article-url title) [:h1 title])
-      (for [oid (sort ids)]
-        (list " "
-              (if (= id oid)
-                (str id)
-                (link-to (str (article-url title) "/" oid) (str oid)))))
-      [:div text]
-      (if (friend/authorized? #{:writer} user)
-        (form-to [:post "/add-text"]
-          (anti-forgery-field)
-          (hidden-field :title title)
-          [:div "article" (text-area :text text)]
-          (submit-button "send it"))))))
 
 (defn petal-class [cc]
   (str "petal " (name cc)))
@@ -223,120 +272,104 @@
 (defn article-page [req title]
   (let [user (friend/identity req)
         name-lr [:name (:current user)]
-        ids (active-ids title)
-        texts (from-keys #(:text (entity @conn %)) ids)
-        colors (into {} (map vector
-                             ids
-                             [:red :blue :green :yellow]))
-        amounts (shares-for-ids @conn ids)
-        own-amounts (from-keys #(or (q '[:find ?amount .
-                                         :in $ ?id ?owner
-                                         :where
-                                         [?pos :of ?id]
-                                         [?pos :amount ?amount]
-                                         [?pos :owner ?owner]]
-                                       @conn % name-lr)
-                                    0)
-                               ids)
-        prcs (prices amounts)]
+        article (entity @conn [:title title])
+        article-text (:text article)
+        children (:proposal article)
+        amounts (shares-for-ids @conn (map :db/id children))
+        own-amounts (own-shares-for-ids @conn (map :db/id children) name-lr)]
     (apage req {:title title}
       [:h1 title]
-      (for [id ids]
-        (list " " (link-to {:class (petal-class (colors id))} (str (article-url title) "/" id) (str id))))
       [:div
-       (for [chunk (flower texts)]
-         (if (string? chunk)
-           chunk
-           (for [id ids
-                 :let [petal (chunk id)]
-                 :when petal]
-             [:span {:class (petal-class (colors id))} petal])))]
-      (for [id ids]
-        [:div {:class (colors id)}
-         (str (int (* 100 (prcs id))) " " (own-amounts id))
-         (if (< 0 (own-amounts id 0))
-           (form-to [:post "/sell"]
+       ; tktk show multi diff with all children
+       article-text
+      (for [child children
+            :let [id (:db/id child)
+                  prcs (prices (select-keys amounts (conj (overlapping-cluster id) :parent)))]]
+        [:div
+         (diff2 article-text (:text child))
+         [:br]
+         (str id
+              (vec (overlapping-cluster id))
+              (vec (not-overlapping-siblings id))
+              " " (int (* 100 (prcs id))) " " (own-amounts id))
+         (if (or (< 100 (:money (entity @conn name-lr) 0))
+                 (< (own-amounts id 0) 0))
+           (form-to [:post "/trade"]
              (anti-forgery-field)
              (hidden-field :text-id id)
-             (submit-button "sell")))
-         (if (< 100 (:money (entity @conn name-lr) 0))
-           (form-to [:post "/buy"]
+             (hidden-field :amount 100)
+             (submit-button "long")))
+           (if (or (< 100 (:money (entity @conn name-lr) 0))
+                   (< 0 (own-amounts id 0)))
+           (form-to [:post "/trade"]
              (anti-forgery-field)
              (hidden-field :text-id id)
-             (submit-button "buy")))
+             (hidden-field :amount -100)
+             (submit-button "short")))
          (if (friend/authorized? #{:admin} user)
            (form-to [:post "/settle"]
              (anti-forgery-field)
              (hidden-field :text-id id)
-             (submit-button "settle")))]))))
+             (submit-button "settle")))])
+      (if (friend/authorized? #{:writer} user)
+        (form-to [:post "/add-text"]
+          (anti-forgery-field)
+          (hidden-field :title title)
+          [:div "article" (text-area :text article-text)]
+          (submit-button "send it"))))))
 
-(defn buy [{:keys [params] :as req}]
+(defn trade [{:keys [params] :as req}]
   (let [id (Long. (:text-id params))
+        amount (Long. (:amount params))
         title (get-title id)]
-    (do-buy (:current (friend/identity req)) id)
-    (redirect (article-url title))))
-
-(defn sell [{:keys [params] :as req}]
-  (let [id (Long. (:text-id params))
-        name-lr [:name (:current (friend/identity req))]
-        e (q '[:find (pull ?pos [:db/id :amount]) .
-               :in $ ?id ?owner
-               :where
-               [?pos :of ?id]
-               [?pos :owner ?owner]]
-             @conn id name-lr)
-        title (get-title id)
-        tres (transact conn [[:db/add (:db/id e) :amount (- (:amount e)
-                                                            (min (:amount e) 100))]])]
-    (charge tres (active-ids title) name-lr #(Math/floor %))
+    (do-trade (:current (friend/identity req)) id amount)
     (redirect (article-url title))))
 
 (defn settle [{:keys [params] :as req}]
   (let [id (Long. (:text-id params))
         title (get-title id)
-        ws (apply +merge (map (partial apply array-map) (q '[:find ?owner ?amount
-                :in $ ?id
-                :where
-                [?pos :of ?id]
-                [?pos :owner ?owner]
-                [?pos :amount ?amount]]
-              @conn id)))
-        all (map first (q '[:find ?pos
-                            :in $ ?title
-                            :where
-                            [?pos :of ?id]
-                            [?id :title ?title]]
-                          @conn title))
-        others (map first (q '[:find ?oid
-                               :in $ ?id
-                               :where
-                               [?id :title ?title]
-                               [?oid :title ?title]
-                               [?oid :chosen]
-                               [(!= ?id ?oid)]]
-                             @conn id))]
-    (transact conn
-              (vec (concat (for [[owner amount] ws
-                                 :let [e (entity @conn owner)]]
-                             [:db/add owner :money (+ amount (:money e) 0)])
-                           (for [pos all]
-                             [:db/retractEntity pos])
-                           (for [article others]
-                             [:db/retract article :chosen])
-                           [[:db/add id :chosen true]])))
+
+        longs
+        (q '[:find ?owner ?amount
+             :in $ ?id
+             :where
+             [?id :support ?pos]
+             [?pos :owner ?owner]
+             [?pos :amount ?amount]
+             [(< 0 ?amount)]]
+           @conn id)
+
+        neutral-texts
+        (->> (not-overlapping-siblings id)
+             (map (partial entity @conn)))
+
+        old-text (:text (:_proposal (entity @conn id)))
+        new-text (:text (entity @conn id))
+        patch (to-patch (diff2 old-text new-text))
+
+        transactions
+        (concat (for [[owner amount] longs]
+                  [:db.fn/call +money owner amount])
+                (for [text neutral-texts
+                      :let [patch2 (combine-patch patch
+                                                  (to-patch (diff2 old-text
+                                                                   (:text text))))
+                            newtext (apply-select old-text
+                                                  (patch-to-select patch2))]]
+                  [:db/add (:db/id text) :text newtext])
+                [[:db/retractEntity id]
+                 {:title title :text new-text}]
+                (for [sibling (overlapping-siblings id)]
+                  [:db.fn/call unsettle sibling]))]
+    (transact conn (vec transactions))
     (redirect (str "/a/" title))))
 
 (defn index [req]
   (apage req
-    (for [[title] (q '[:find ?title
-                       :in $ %
-                       :where
-                       [?id :title ?title]
-                       (active ?id)
-                       [?id :text ?text]
-                       [(not= ?text "")]]
-                     @conn
-                     active-id)]
+    (for [title (q '[:find [?title ...]
+                     :where
+                     [_ :title ?title]]
+                   @conn)]
       (list " " (link-to (article-url title) title)))
     (if (friend/authorized? #{:writer} (friend/identity req))
       (form-to [:post "/add-text"]
@@ -347,8 +380,7 @@
 
 (defroutes writer-routes
   (POST "/add-text" [] add-text-post)
-  (POST "/sell" [] sell)
-  (POST "/buy" [] buy))
+  (POST "/trade" [] trade))
 
 (defroutes admin-routes
   (POST "/settle" [] settle))
@@ -377,6 +409,10 @@
                    :role [:writer]
                    :money 500}]))
 
+(defn make-admin [name]
+  (transact conn [{:name name
+                   :role [:admin]}]))
+
 (defn register-post [{{:keys [username password]} :params :as req}]
   (if (entity @conn [:name username])
     ; tktk show error
@@ -397,7 +433,6 @@
 
 (defroutes app
   (GET "/a/:title" [title :as req] (article-page req (url-decode title)))
-  (GET "/a/:title/:id" [title id :as req] (text-page req (url-decode title) (Long. id)))
   (GET "/login" [] login-form)
   (GET "/register" [] register-form)
   (POST "/register" [] register-post)
