@@ -318,7 +318,8 @@
                     (vec (not-overlapping-siblings id)))
                (anti-forgery-field)
                (hidden-field :text-id id)
-               (submit-button "settle"))])]))]
+               (submit-button {:name :action} "settle")
+               (submit-button {:name :action} "unsettle"))])]))]
       (if (friend/authorized? #{:writer} user)
         (form-to [:post "/add-text"]
           (anti-forgery-field)
@@ -333,11 +334,8 @@
     (do-trade (:current (friend/identity req)) id amount)
     (redirect (article-url title))))
 
-(defn settle [{:keys [params] :as req}]
-  (let [id (Long. (:text-id params))
-        title (get-title id)
-
-        longs
+(defn settle [db id]
+  (let [longs
         (q '[:find ?owner ?amount
              :in $ ?id
              :where
@@ -345,31 +343,39 @@
              [?pos :owner ?owner]
              [?pos :amount ?amount]
              [(< 0 ?amount)]]
-           @conn id)
+           db id)
 
         neutral-texts
         (->> (not-overlapping-siblings id)
-             (map (partial entity @conn)))
+             (map (partial entity db)))
 
-        old-text (:text (:_proposal (entity @conn id)))
-        new-text (:text (entity @conn id))
-        patch (to-patch (diff2 old-text new-text))
+        article (:_proposal (entity db id))
 
-        transactions
-        (concat (for [[owner amount] longs]
-                  [:db.fn/call +money owner amount])
-                (for [text neutral-texts
-                      :let [patch2 (combine-patch patch
-                                                  (to-patch (diff2 old-text
-                                                                   (:text text))))
-                            newtext (apply-select old-text
-                                                  (patch-to-select patch2))]]
-                  [:db/add (:db/id text) :text newtext])
-                [[:db/retractEntity id]
-                 {:title title :text new-text}]
-                (for [sibling (overlapping-siblings id)]
-                  [:db.fn/call unsettle sibling]))]
-    (transact conn (vec transactions))
+        old-text (:text article)
+        new-text (:text (entity db id))
+        patch (to-patch (diff2 old-text new-text))]
+    (vec (concat (for [[owner amount] longs]
+                   [:db.fn/call +money owner amount])
+                 (for [text neutral-texts
+                       :let [patch2 (combine-patch patch
+                                                   (to-patch (diff2 old-text
+                                                                    (:text text))))
+                             newtext (apply-select old-text
+                                                   (patch-to-select patch2))]]
+                   [:db/add (:db/id text) :text newtext])
+                 [[:db/retractEntity id]
+                  [:db/add (:db/id article) :text new-text]]
+                 (for [sibling (overlapping-siblings id)]
+                   [:db.fn/call unsettle sibling])))))
+
+(defn settle-post [{{:keys [text-id action]} :params}]
+  (let [id (Long. text-id)
+        title (get-title id)]
+    (transact conn [[:db.fn/call
+                     (condp = action
+                       "settle" settle
+                       "unsettle" unsettle)
+                     id]])
     (redirect (str "/a/" title))))
 
 (defn index [req]
@@ -391,7 +397,7 @@
   (POST "/trade" [] trade))
 
 (defroutes admin-routes
-  (POST "/settle" [] settle))
+  (POST "/settle" [] settle-post))
 
 (defn login-form [req]
   (apage req {:title "Login"}
