@@ -279,13 +279,13 @@
         own-amounts (own-shares-for-ids @conn (map :db/id children) name-lr)]
     (apage req {:title title}
       [:h1 title]
-      [:div
+      [:div.text
        ; tktk show multi diff with all children
-       article-text
+       article-text]
       (for [child children
             :let [id (:db/id child)
                   prcs (prices (select-keys amounts (conj (overlapping-cluster id) :parent)))]]
-        [:div
+        [:div.text
          (diff2 article-text (:text child))
          [:br]
          (str id
