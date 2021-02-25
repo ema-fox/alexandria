@@ -282,35 +282,43 @@
       [:div.text
        ; tktk show multi diff with all children
        article-text]
+      [:table
       (for [child children
             :let [id (:db/id child)
                   prcs (prices (select-keys amounts (conj (overlapping-cluster id) :parent)))]]
-        [:div.text
-         (diff2 article-text (:text child))
-         [:br]
-         (str id
-              (vec (overlapping-cluster id))
-              (vec (not-overlapping-siblings id))
-              " " (int (* 100 (prcs id))) " " (own-amounts id))
-         (if (or (< 100 (:money (entity @conn name-lr) 0))
-                 (< (own-amounts id 0) 0))
-           (form-to [:post "/trade"]
-             (anti-forgery-field)
-             (hidden-field :text-id id)
-             (hidden-field :amount 100)
-             (submit-button "long")))
-           (if (or (< 100 (:money (entity @conn name-lr) 0))
-                   (< 0 (own-amounts id 0)))
-           (form-to [:post "/trade"]
-             (anti-forgery-field)
-             (hidden-field :text-id id)
-             (hidden-field :amount -100)
-             (submit-button "short")))
-         (if (friend/authorized? #{:admin} user)
-           (form-to [:post "/settle"]
-             (anti-forgery-field)
-             (hidden-field :text-id id)
-             (submit-button "settle")))])
+        (list
+         [:tr [:td.text {:colspan 9}
+               (diff2 article-text (:text child))]]
+         [:tr
+          [:td (str (int (* 100 (prcs id))))]
+          (if (friend/authorized? #{:writer} user)
+            (list
+             [:td
+              (form-to [:post "/trade"]
+                (anti-forgery-field)
+                (hidden-field :text-id id)
+                (hidden-field :amount 100)
+                (submit-button {:disabled (not (or (< 100 (:money (entity @conn name-lr) 0))
+                                                   (< (own-amounts id 0) 0)))}
+                               "long"))]
+             [:td
+              (form-to [:post "/trade"]
+                (anti-forgery-field)
+                (hidden-field :text-id id)
+                (hidden-field :amount -100)
+                (submit-button {:disabled (not (or (< 100 (:money (entity @conn name-lr) 0))
+                                                   (< 0 (own-amounts id 0))))}
+                               "short"))]
+             [:td (str (own-amounts id))]))
+          (if (friend/authorized? #{:admin} user)
+            [:td
+             (form-to [:post "/settle"]
+               (str id " "
+                    (vec (overlapping-cluster id)) " "
+                    (vec (not-overlapping-siblings id)))
+               (anti-forgery-field)
+               (hidden-field :text-id id)
+               (submit-button "settle"))])]))]
       (if (friend/authorized? #{:writer} user)
         (form-to [:post "/add-text"]
           (anti-forgery-field)
