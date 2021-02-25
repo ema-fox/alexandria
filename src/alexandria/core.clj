@@ -453,8 +453,6 @@
   (route/resources "/")
   (route/not-found "not found"))
 
-(def users (read-string (slurp "users.edn")))
-
 (defn cred-fn [& args]
   (prn args))
 
