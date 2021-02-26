@@ -202,8 +202,7 @@
     (vec (concat (for [[owner amount] shorts]
                    ; give back collateral
                    [:db.fn/call +money owner (- amount)])
-                 [[:db/retractEntity id]
-                  [:db.fn/call retract-empty (:db/id (:_proposal (entity db id)))]]))))
+                 [[:db/retractEntity id]]))))
 
 (defn unsettle-unsupported [db id]
   (if-not (q '[:find ?pos .
@@ -375,7 +374,8 @@
                      (condp = action
                        "settle" settle
                        "unsettle" unsettle)
-                     id]])
+                     id]
+                    [:db.fn/call retract-empty [:title title]]])
     (redirect (str "/a/" title))))
 
 (defn index [req]
