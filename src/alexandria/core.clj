@@ -227,7 +227,8 @@
                  (charge-collateral (own-shares-for-ids (:db-before tres) ids name-lr)
                                     (own-shares-for-ids (:db-after tres) ids name-lr)))]
     (transact conn [[:db.fn/call +money name-lr (- price)]
-                    [:db.fn/call unsettle-unsupported id]])))
+                    [:db.fn/call unsettle-unsupported id]
+                    [:db.fn/call retract-empty (:db/id (:_proposal (entity @conn id)))]])))
 
 (defn add-text-post [{{:keys [title text]} :params :as req}]
   (let [id (add-text (lower-case title) (trim text))]
