@@ -377,7 +377,7 @@
                        "unsettle" unsettle)
                      id]
                     [:db.fn/call retract-empty [:title title]]])
-    (redirect (str "/a/" title))))
+    (redirect (article-url title))))
 
 (defn index [req]
   (apage req
