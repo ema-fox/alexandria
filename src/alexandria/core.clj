@@ -405,7 +405,7 @@
     [:h3 "Login"]
     (form-to [:post "/login"]
       (anti-forgery-field)
-      [:div "Username" [:input {:type "text" :name "username"}]]
+      [:div "Username" [:input {:type "text" :name "username" :autofocus true}]]
       [:div "Password" [:input {:type "password" :name "password"}]]
       [:div (submit-button "login")])))
 
@@ -414,7 +414,7 @@
     [:h3 "Register"]
     (form-to [:post "/register"]
       (anti-forgery-field)
-      [:div "Username" [:input {:type "text" :name "username"}]]
+      [:div "Username" [:input {:type "text" :name "username" :autofocus true}]]
       [:div "Password" [:input {:type "password" :name "password"}]]
       [:div (submit-button "register")])))
 
