@@ -1,7 +1,7 @@
 (ns alexandria.core
   (:refer-clojure :exclude [read-string])
   (:require (clojure [edn :refer [read-string]]
-                     [string :refer [trim]])
+                     [string :refer [trim lower-case]])
             [datahike.api :refer [q pull transact entity] :as d]
             (ring.middleware [defaults :refer [wrap-defaults site-defaults]]
                               [reload :refer [wrap-reload]])
@@ -231,7 +231,7 @@
                     [:db.fn/call unsettle-unsupported id]])))
 
 (defn add-text-post [{{:keys [title text]} :params :as req}]
-  (let [id (add-text title (trim text))]
+  (let [id (add-text (lower-case title) (trim text))]
     (do-trade (:current (friend/identity req)) id 100)
     (redirect (article-url title))))
 
@@ -272,7 +272,7 @@
 (defn article-page [req title]
   (let [user (friend/identity req)
         name-lr [:name (:current user)]
-        article (entity @conn [:title title])
+        article (entity @conn [:title (lower-case title)])
         article-text (:text article)
         children (:proposal article)
         amounts (shares-for-ids @conn (map :db/id children))
