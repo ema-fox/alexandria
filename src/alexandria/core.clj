@@ -13,7 +13,8 @@
                        [route :as route])
             (hiccup [page :refer [html5 include-css]]
                     [form :refer [form-to text-field text-area hidden-field submit-button select-options]]
-                    [element :refer [link-to]])
+                    [element :refer [link-to]]
+                    [util :refer [escape-html]])
             [cemerick.friend :as friend]
             (cemerick.friend [workflows :as workflows]
                              [credentials :as creds])
@@ -278,17 +279,17 @@
         amounts (shares-for-ids @conn (map :db/id children))
         own-amounts (own-shares-for-ids @conn (map :db/id children) name-lr)]
     (apage req {:title title}
-      [:h1 title]
+      [:h1 (escape-html title)]
       [:div.text
        ; tktk show multi diff with all children
-       article-text]
+       (escape-html article-text)]
       [:table
       (for [child children
             :let [id (:db/id child)
                   prcs (prices (select-keys amounts (conj (overlapping-cluster id) :parent)))]]
         (list
          [:tr [:td.text {:colspan 9}
-               (diff2 article-text (:text child))]]
+               (map #(update % 2 escape-html) (diff2 article-text (:text child)))]]
          [:tr
           [:td (str (int (* 100 (prcs id))))]
           (if (friend/authorized? #{:writer} user)
@@ -385,7 +386,7 @@
                      :where
                      [_ :title ?title]]
                    @conn)]
-      (list " " (link-to (article-url title) title)))
+      (list " " (link-to (article-url title) (escape-html title))))
     (if (friend/authorized? #{:writer} (friend/identity req))
       (form-to [:post "/add-text"]
         (anti-forgery-field)
