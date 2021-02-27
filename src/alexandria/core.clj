@@ -19,6 +19,7 @@
             (cemerick.friend [workflows :as workflows]
                              [credentials :as creds])
             [java-time :refer [local-date zone-id]]
+            [instaparse.core :refer [parser parse transform]]
             (alexandria [util :refer :all]
                         [market :refer [prices charge charge-collateral]]
                         [diff :refer [diff2 to-patch combine-patch overlapping-patch apply-select patch-to-select]])))
@@ -266,6 +267,18 @@
               (link-to "/register" "register")])]
           ~@contents]))))
 
+(def article-parser (parser "
+<article> = (paragraph (<'\n'>+ paragraph)*)?
+paragraph = (text | internal-link)+
+text = ordinary
+internal-link = <'[['> ordinary <']]'>
+<ordinary> = #'[^\\[\\]\n]+'
+"))
+
+(def article-transformers
+  {:paragraph (fn [& xs] (apply vector :p xs))
+   :text escape-html
+   :internal-link #(link-to (article-url %) (escape-html %))})
 
 (defn petal-class [cc]
   (str "petal " (name cc)))
@@ -282,7 +295,8 @@
       [:h1 (escape-html title)]
       [:div.text
        ; tktk show multi diff with all children
-       (escape-html article-text)]
+       (->> (parse article-parser article-text)
+            (transform article-transformers))]
       [:table
       (for [child children
             :let [id (:db/id child)
