@@ -252,6 +252,8 @@
           [:title ~(if-let [title (:title options)]
                      `(str ~title " - Alexandria")
                      "Alexandria")]
+          ~(if-let [description (:description options)]
+             `[:meta {:property "og:description" :content ~description}])
           (include-css "/style.css")]
          [:body
           [:div.header
@@ -296,7 +298,8 @@ internal-link = <'[['> #'[^|\\[\\]\n]+' (<'|'> ordinary)? <']]'>
         children (:proposal article)
         amounts (shares-for-ids @conn (map :db/id children))
         own-amounts (own-shares-for-ids @conn (map :db/id children) name-lr)]
-    (apage req {:title title}
+    (apage req {:title title
+                :description (subs article-text 0 (min 140 (count article-text)))}
       [:h1 (escape-html title)]
       [:div.text
        ; tktk show multi diff with all children
