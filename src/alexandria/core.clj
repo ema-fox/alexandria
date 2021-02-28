@@ -294,7 +294,7 @@ internal-link = <'[['> #'[^|\\[\\]\n]+' (<'|'> ordinary)? <']]'>
   (let [user (friend/identity req)
         name-lr [:name (:current user)]
         article (entity @conn [:title (lower-case title)])
-        article-text (:text article)
+        article-text (:text article "")
         children (:proposal article)
         amounts (shares-for-ids @conn (map :db/id children))
         own-amounts (own-shares-for-ids @conn (map :db/id children) name-lr)]
