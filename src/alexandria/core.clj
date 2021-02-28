@@ -271,14 +271,19 @@
 <article> = (paragraph (<'\n'>+ paragraph)*)?
 paragraph = (text | internal-link)+
 text = ordinary
-internal-link = <'[['> ordinary <']]'>
+internal-link = <'[['> #'[^|\\[\\]\n]+' (<'|'> ordinary)? <']]'>
 <ordinary> = #'[^\\[\\]\n]+'
 "))
 
 (def article-transformers
   {:paragraph (fn [& xs] (apply vector :p xs))
    :text escape-html
-   :internal-link #(link-to (article-url %) (escape-html %))})
+   :internal-link
+   (fn [target & [tail]]
+     (link-to (article-url target)
+              (escape-html (if (= \^ (first tail))
+                             (subs tail 1)
+                             (str target tail)))))})
 
 (defn petal-class [cc]
   (str "petal " (name cc)))
