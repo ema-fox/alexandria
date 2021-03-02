@@ -11,6 +11,11 @@
     background-color: rgba(240, 50, 130, 0.1);
 }
 
+textarea {
+    width: 80ch;
+    height: 25em;
+}
+
 .red {
 
 .petal {
