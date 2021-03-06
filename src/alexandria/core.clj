@@ -404,11 +404,14 @@ internal-link = <'[['> #'[^|\\[\\]\n]+' (<'|'> ordinary)? <']]'>
 
 (defn index [req]
   (apage req
-    (for [title (q '[:find [?title ...]
-                     :where
-                     [_ :title ?title]]
-                   @conn)]
-      (list " " (link-to (article-url title) (escape-html title))))
+    (for [{:keys [title proposal]}
+          (q '[:find [(pull ?id [:title :proposal]) ...];(entity ?id) ...]
+               :where
+               [?id :title]]
+             @conn)]
+      (list " " (link-to (article-url title) (escape-html title))
+            (if (seq proposal)
+              (str "(" (count proposal) ")"))))
     (if (friend/authorized? #{:writer} (friend/identity req))
       (form-to [:post "/add-text"]
         (anti-forgery-field)
